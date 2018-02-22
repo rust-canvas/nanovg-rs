@@ -1712,8 +1712,8 @@ impl Alignment {
 /// A transformation is a column-major matrix in the following form:
 /// [a c e] - indices [0 2 4]
 /// [b d f] - indices [1 3 5]
-/// [0 0 1] - not passed.
-/// The last row however is not specified; it is always [0 0 1] behind the scenes.
+/// [0 0 1] - not stored.
+/// The last row however is not stored to save some bytes; it is always [0 0 1] behind the scenes.
 #[derive(Clone, Copy, Debug)]
 pub struct Transform {
     pub matrix: [f32; 6],
@@ -1721,43 +1721,184 @@ pub struct Transform {
 
 impl Transform {
     /// Construct a new transform with an identity matrix.
+    /// This corresponds to the origin of the coordinate system.
     pub fn new() -> Self {
         Self {
             matrix: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
         }
     }
 
-    /// Set the translation of the transform.
-    pub fn translate(self, x: f32, y: f32) -> Self {
-        let mut new = self.clone();
+    /// Create a new transform with a translation.
+    pub fn from_translation(x: f32, y: f32) -> Self {
+        let mut new = Self::new();
         new.matrix[4] = x;
         new.matrix[5] = y;
         new
     }
 
-    /// Set the scale of the transform.
-    pub fn scale(self, x: f32, y: f32) -> Self {
-        let mut new = self.clone();
+    /// Create a new transform with a scale.
+    pub fn from_scale(x: f32, y: f32) -> Self {
+        let mut new = Self::new();
         new.matrix[0] = x;
         new.matrix[3] = y;
         new
     }
 
-    /// Set the skew of the transform.
-    pub fn skew(self, x: f32, y: f32) -> Self {
-        let mut new = self.clone();
+    /// Create a new transform with a skew.
+    pub fn from_skew(x: f32, y: f32) -> Self {
+        let mut new = Self::new();
         new.matrix[2] = x;
         new.matrix[1] = y;
         new
     }
 
-    /// Set the rotation of the transform.
-    pub fn rotate(self, theta: f32) -> Self {
-        let mut new = self.clone();
-        new.matrix[0] = theta.cos();
-        new.matrix[2] = -theta.sin();
-        new.matrix[1] = theta.sin();
-        new.matrix[3] = theta.cos();
+    /// Create a new transform with a rotation.
+    pub fn from_rotation(angle: f32) -> Self {
+        let mut new = Self::new();
+        let (cos, sin) = (angle.cos(), angle.sin());
+        new.matrix[0] = cos;
+        new.matrix[1] = sin;
+        new.matrix[2] = -sin;
+        new.matrix[3] = cos;
         new
+    }
+
+    /// Convert this transform into a column-major 4x4 matrix.
+    pub fn as_matrix4(&self) -> [f32; 4*4] {
+        let m = &self.matrix;
+        [
+            m[0], m[1], m[2], 0.0,
+            m[3], m[4], m[5], 0.0,
+            0.0, 0.0, 1.0, 0.0,
+            0.0, 0.0, 0.0, 1.0,
+        ]
+    }
+}
+
+impl std::ops::Mul for Transform {
+    type Output = Transform;
+    fn mul(self, rhs: Transform) -> Self::Output {
+        let mut res_trans = Transform { matrix: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0] };
+        let m1 = &self.matrix;
+        let m2 = &rhs.matrix;
+        {
+            let res = &mut res_trans.matrix;
+            // [a c e] - indices [0 2 4]
+            // [b d f] - indices [1 3 5]
+            // [0 0 1] 
+            res[0] = (m1[0] * m2[0]) + (m1[2] * m2[1]);
+            res[2] = (m1[0] * m2[2]) + (m1[2] * m2[3]);
+            res[4] = (m1[0] * m2[4]) + (m1[2] * m2[5]) + m1[4];
+            
+            res[1] = (m1[1] * m2[0]) + (m1[3] * m2[1]);
+            res[3] = (m1[1] * m2[2]) + (m1[3] * m2[3]);
+            res[5] = (m1[1] * m2[4]) + (m1[3] * m2[5]) + m1[5];
+        }
+        res_trans
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    macro_rules! f32_eq {
+        ($f1:expr, $f2:expr) => {
+            ($f1 - $f2).abs() < std::f32::EPSILON
+        };
+    }
+
+    macro_rules! trans_eq_bool {
+        ($t1:expr, $t2:expr) => {
+            f32_eq!($t1.matrix[0], $t2.matrix[0]) &&
+            f32_eq!($t1.matrix[1], $t2.matrix[1]) &&
+            f32_eq!($t1.matrix[2], $t2.matrix[2]) &&
+            f32_eq!($t1.matrix[3], $t2.matrix[3]) &&
+            f32_eq!($t1.matrix[4], $t2.matrix[4]) &&
+            f32_eq!($t1.matrix[5], $t2.matrix[5])
+        };
+    }
+
+    macro_rules! trans_eq {
+        ($t1:expr, $t2:expr) => {
+            assert!(trans_eq_bool!($t1, $t2))
+        };
+    }
+
+    macro_rules! trans_not_eq {
+        ($t1:expr, $t2:expr) => {
+            assert!(!trans_eq_bool!($t1, $t2))
+        };
+    }
+
+    macro_rules! mat4_eq {
+        ($m1:expr, $m2:expr) => {
+            let res = {
+                f32_eq!($m1[0], $m2[0]) &&
+                f32_eq!($m1[1], $m2[1]) &&
+                f32_eq!($m1[2], $m2[2]) &&
+                f32_eq!($m1[3], $m2[3]) &&
+                f32_eq!($m1[4], $m2[4]) &&
+                f32_eq!($m1[5], $m2[5]) &&
+                f32_eq!($m1[6], $m2[6]) &&
+                f32_eq!($m1[7], $m2[7]) &&
+                f32_eq!($m1[8], $m2[8]) &&
+                f32_eq!($m1[9], $m2[9]) &&
+                f32_eq!($m1[10], $m2[10]) &&
+                f32_eq!($m1[11], $m2[11]) &&
+                f32_eq!($m1[12], $m2[12]) &&
+                f32_eq!($m1[13], $m2[13]) &&
+                f32_eq!($m1[14], $m2[14]) &&
+                f32_eq!($m1[15], $m2[15])
+            };
+            assert!(res)
+        };
+    }
+
+    #[test]
+    fn test_transform() {
+        // Contructors
+        trans_eq!(Transform::new(), Transform {
+            matrix: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        });
+
+        trans_eq!(Transform::from_translation(11.1, 22.2), Transform {
+            matrix: [1.0, 0.0, 0.0, 1.0, 11.1, 22.2],
+        });
+
+        trans_eq!(Transform::from_scale(11.1, 22.2), Transform {
+            matrix: [11.1, 0.0, 0.0, 22.2, 0.0, 0.0],
+        });
+
+        trans_eq!(Transform::from_skew(11.1, 22.2), Transform {
+            matrix: [1.0, 22.2, 11.1, 1.0, 0.0, 0.0],
+        });
+
+        let angle = 90f32.to_radians();
+        trans_eq!(Transform::from_rotation(angle), Transform {
+            matrix: [angle.cos(), angle.sin(), -angle.sin(), angle.cos(), 0.0, 0.0],
+        });
+
+        // Matrix conversion
+        mat4_eq!((Transform {
+            matrix: [
+                1.0, 3.0, 5.0,
+                2.0, 4.0, 6.0,
+            ],
+        }).as_matrix4(), [
+            1.0, 3.0, 5.0, 0.0,
+            2.0, 4.0, 6.0, 0.0,
+            0.0, 0.0, 1.0, 0.0,
+            0.0, 0.0, 0.0, 1.0,
+        ]);
+
+        // Multiplication
+        let identity = Transform::new();
+        let trans = Transform::from_translation(10.0, 20.0);
+        trans_eq!(identity * trans, trans);
+        trans_eq!(trans * identity, trans);
+        let a = Transform::from_rotation(123.0);
+        let b = Transform::from_skew(66.6, 1337.2);
+        trans_not_eq!(a * b, b * a);
     }
 }
